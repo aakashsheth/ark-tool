@@ -1,0 +1,123 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Cloudformation template to provision an Ark Server'
+
+Parameters:
+  ArkServerName:
+    Description: The name of the ark server
+    Type: String
+  ArkServerJoinPassword:
+    Description: Password to join server
+    Type: String
+    NoEcho: True
+  ArkAdminServerPassword:
+    Description: Password to admin server
+    Type: String
+    NoEcho: True
+  SSHLocation:
+    Description: My Ip
+    Type: String
+  AvailabilityZone:
+    Description: Where to launch the instance
+    Type: String
+    Default: us-east-1a
+  ExistingRouteTableId:
+    Description: Route table to associate public subnet with
+    Type: String
+  ExistingVpcId:
+    Description: Vpc to associate public subnet with
+    Type: String
+
+Resources:
+
+  ArkPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: 10.0.0.64/28
+      MapPublicIpOnLaunch: "true"
+      VpcId: !Ref ExistingVpcId
+
+  ArkPublicSubnetRouteTableAssocation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ExistingRouteTableId
+      SubnetId: !Ref ArkPublicSubnet
+
+  ArkServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      InstanceType: t2.micro
+      ImageId: ami-a4dc46db
+      KeyName: ark-server
+      SubnetId: !Ref ArkPublicSubnet
+      SecurityGroupIds:
+        - !Ref ArkSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sdf
+          Ebs:
+            DeleteOnTermination: False
+            VolumeSize: 20
+      Tags:
+        - Key: servername
+          Value: !Ref ArkServerName
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash -xe
+
+            # install prereqs
+            apt-get install -y lib32gcc1
+
+            # Setup file limits
+            echo "fs.file-max=100000" >> /etc/sysctl.conf
+            sysctl -p /etc/sysctl.conf
+            echo "* soft nofile 1000000" >> /etc/security/limits.conf
+            echo "* hard nofile 1000000" >> /etc/security/limits.conf
+
+            echo "session required pam_limits.so" >> /etc/pam.d/common-session
+
+            # Open appropriate ports
+            for port in 7777 7778 27015; do
+               ufw allow $port/udp
+            done
+
+            useradd -m steam
+            curl -sL http://git.io/vtf5N | sudo bash -s steam
+            su steam
+            cd ~/
+
+            # Install Steamcmd and ArkManager
+            curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar zxvf -
+
+            arkmanager install
+            arkmanager start @main
+
+  ArkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ArkServerSecurityGroup
+      GroupDescription: Allow needed UDP and SSHLocation inbound
+      VpcId: vpc-0646913daf49fbe9e
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: udp
+          FromPort: '27015'
+          ToPort: '27015'
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: udp
+          FromPort: '7778'
+          ToPort: '7778'
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: udp
+          FromPort: '7777'
+          ToPort: '7777'
+          CidrIp: '0.0.0.0/0'
+
+Outputs:
+  ServerName:
+    Value: !Ref ArkServerName
+    Description: Name of the ArkServer
